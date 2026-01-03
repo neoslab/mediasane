@@ -54,7 +54,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 # Define 'VERSION'
-VERSION = "v1.2.0"
+VERSION = "v1.2.1"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
