@@ -1,6 +1,6 @@
 # MediaSane — Media Rename GUI
 
-![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
+![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **MediaSane** is a fast, no-nonsense GUI utility to **organize and rename photos/videos**. It derives dates from **EXIF/metadata** (falls back to mtime/today), applies clean prefixes (e.g. `IMG-` / `VID-`), detects **duplicates by content hash**, and moves files safely with a **dry-run preview**, **stop** control, and robust temp-file finalization.
@@ -34,7 +34,7 @@
 
 ## Requirements
 
-- Linux (Ubuntu/Debian recommended). Should also run on macOS/Windows with PyQt6 installed.
+- Ubuntu 22.04+ (or Debian-based)
 - Python **3.9+**
 - Packages:
 
