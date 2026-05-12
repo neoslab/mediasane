@@ -14,7 +14,7 @@ appname="MediaSane"
 debname="mediasane"
 
 # Define 'debvers'
-debvers="1.2.2"
+debvers="1.2.3"
 
 # Define 'debarch'
 debarch="all"
@@ -97,6 +97,8 @@ install -m 0644 "assets/icons/error.png" "${pkgroot}/usr/share/${debname}/icons/
 install -m 0644 "assets/icons/success.png" "${pkgroot}/usr/share/${debname}/icons/success.png"
 
 # Create desktop launcher
+
+
 cat > "${pkgroot}/usr/share/applications/${debname}.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -105,11 +107,12 @@ GenericName=Media Organizer & Renamer
 Comment=Organize and rename photos/videos by date; de-duplicate safely
 Exec=${execpath}
 TryExec=${execpath}
-Icon=/usr/share/pixmaps/${debname}.png
+Icon=${debname}
 Terminal=false
 Categories=Graphics;Photography;AudioVideo;Utility;
 StartupNotify=true
-Keywords=media;photos;pictures;images;videos;rename;organize;exif;duplicate;dedupe;album;
+StartupWMClass=${appname}
+Keywords=cleanup;cache;system;maintenance;ubuntu;
 EOF
 chmod 0644 "${pkgroot}/usr/share/applications/${debname}.desktop"
 

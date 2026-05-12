@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -19,10 +20,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QEvent
 from PyQt6.QtCore import QPropertyAnimation
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QIcon
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import QCheckBox
@@ -35,6 +38,7 @@ from PyQt6.QtWidgets import QHBoxLayout
 from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import QLabel
 from PyQt6.QtWidgets import QLineEdit
+from PyQt6.QtWidgets import QMenu
 from PyQt6.QtWidgets import QMenuBar
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtWidgets import QProgressBar
@@ -44,6 +48,7 @@ from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtWidgets import QVBoxLayout
 from PyQt6.QtWidgets import QWidget
+from typing import cast
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -54,7 +59,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 # Define 'VERSION'
-VERSION = "v1.2.2"
+VERSION = "v1.2.3"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
@@ -93,10 +98,17 @@ class SysUtils:
     # Define 'cmdexists'
     @staticmethod
     def cmdexists(cmd: str) -> bool:
-        """Check whether an executable is available in PATH.
-        Relies on shutil.which to probe the current environment.
-        Useful to conditionally use external tools like exiftool."""
-        return shutil.which(cmd) is not None
+        """Check whether a command exists in the current PATH.
+        Rejects empty names and path-like values containing '/'.
+        Returns True if an executable matching the command is found."""
+        if not cmd or "/" in cmd:
+            return False
+
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = Path(directory) / cmd
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return True
+        return False
 
     # Define 'classify'
     @staticmethod
@@ -181,7 +193,7 @@ class SysUtils:
     def hashkey(path: Path, hash_budget_s: int = 60, quick_prefix_bytes: int = 1024 * 1024) -> Tuple[str, bool]:
         """Compute a content hash key with a time budget.
         Falls back to a weak key (size@mtime) if budget exceeded or I/O fails.
-        Also includes a quick blake2b of the file prefix for robustness."""
+        Also includes a quick Blake-2b of the file prefix for robustness."""
         try:
             st = path.stat()
             size = st.st_size
@@ -442,8 +454,8 @@ class MediaRenamer:
             pass
         return groups
 
-    # Define 'seqall'
-    def seqall(self, out: Path):
+    # Define 'allseq'
+    def allseq(self, out: Path):
         """Normalize numbering to start at 00001 for each date group.
         Renames both existing and newly added files to fill gaps.
         Uses temp placeholders to avoid collisions during renames."""
@@ -500,8 +512,8 @@ class MediaRenamer:
                         continue
                 self.rowsink.put((str(src), str(cand)))
 
-    # Define 'plan'
-    def plan(self):
+    # Define 'plandup'
+    def plandup(self):
         """Plan duplicate handling and final rename destinations.
         Computes content hash keys, tracks dupes, and sequences files.
         Populates action lists and a readable results summary."""
@@ -554,8 +566,8 @@ class MediaRenamer:
             self.actrenames.append((fpath, tmpdst, enddst))
             self.results.append((str(fpath), str(enddst)))
 
-    # Define 'execute'
-    def execute(self):
+    # Define 'planexec'
+    def planexec(self):
         """Execute planned duplicate handling and renames.
         Performs safe moves to temporary paths before finalization.
         Emits a row (old,new) to the queue for each processed file."""
@@ -567,7 +579,7 @@ class MediaRenamer:
                 self.checkstop()
                 self.rowsink.put((old, new))
             out = Path(self.opts.outdir) if self.opts.outdir else Path(self.opts.srcdir)
-            self.seqall(out)
+            self.allseq(out)
             return
 
         for srcpath, action, destpath in self.actdupes:
@@ -621,15 +633,15 @@ class MediaRenamer:
             self.rowsink.put(("__COUNT__", f"{processed}"))
 
         out = Path(self.opts.outdir) if self.opts.outdir else Path(self.opts.srcdir)
-        self.seqall(out)
+        self.allseq(out)
 
     # Function 'streamrun'
     def streamrun(self):
         """Stream files one-by-one with progressive UI updates.
         Enumerates, hashes, decides destination, moves, and reports.
         Preserves date-group numbering that restarts at each date."""
-        self.plan()
-        self.execute()
+        self.plandup()
+        self.planexec()
 
     # Define 'run'
     def run(self):
@@ -661,9 +673,9 @@ class DialogPrefs(QDialog):
         wnaming = QWidget()
         g = QFormLayout(wnaming)
         self.editimg = QLineEdit(self.prefs.imgprefix)
-        self.editvid = QLineEdit(self.prefs.vidprefix)
+        self.edited = QLineEdit(self.prefs.vidprefix)
         g.addRow(QLabel("Image prefix:"), self.editimg)
-        g.addRow(QLabel("Video prefix:"), self.editvid)
+        g.addRow(QLabel("Video prefix:"), self.edited)
         tabs.addTab(wnaming, "Naming")
 
         btns = QDialogButtonBox(parent=self)
@@ -684,7 +696,7 @@ class DialogPrefs(QDialog):
         Falls back to defaults when fields are left blank.
         Intended to be called after dialog acceptance."""
         self.prefs.imgprefix = self.editimg.text().strip() or "IMG-"
-        self.prefs.vidprefix = self.editvid.text().strip() or "VID-"
+        self.prefs.vidprefix = self.edited.text().strip() or "VID-"
         return self.prefs
 
 
@@ -826,8 +838,8 @@ class DialogCompleted(QDialog):
         Uses the parent's geometry for accurate positioning.
         """
         self.adjustSize()
-        if self.parent() and isinstance(self.parent(), QWidget):
-            parent: QWidget = self.parent()
+        parent = self.parentWidget()
+        if parent is not None:
             center = parent.geometry().center()
             self.move(center - self.rect().center())
         self.exec()
@@ -838,8 +850,6 @@ class MediaSane(QWidget):
     """Main PyQt GUI for MediaSane's rename workflow.
     Provides source/output selection, options, and progress.
     Streams results into a table while a worker thread runs."""
-
-    # Signal emitted when a run completes (success flag, error text)
     completed = pyqtSignal(bool, str)
 
     # Define '__init__'
@@ -848,6 +858,15 @@ class MediaSane(QWidget):
         Loads saved config, initializes preferences, and wiring.
         Sets up a background queue for incremental row updates."""
         super().__init__()
+        iconpath = Path("/usr/share/pixmaps/mediasane.png")
+        if iconpath.is_file():
+            appicon = QIcon(str(iconpath))
+            self.setWindowIcon(appicon)
+            appinstance = QApplication.instance()
+            if appinstance is not None:
+                app = cast(QApplication, appinstance)
+                app.setWindowIcon(appicon)
+
         self.setWindowTitle(f"{APPNAME} {VERSION} - Media Rename GUI")
         self.resize(1000, 700)
 
@@ -860,24 +879,24 @@ class MediaSane(QWidget):
         self.rowindex: Dict[str, int] = {}
 
         menubar = QMenuBar(self)
-        mfile = menubar.addMenu("File")
+        mfile = cast(QMenu, menubar.addMenu("File"))
         actquit = QAction("Quit", self)
         actquit.triggered.connect(QApplication.quit)
         mfile.addAction(actquit)
 
-        medit = menubar.addMenu("Edit")
+        medit = cast(QMenu, menubar.addMenu("Edit"))
         actprefs = QAction("Preferences", self)
         actprefs.triggered.connect(self.onprefs)
         medit.addAction(actprefs)
 
-        mhelp = menubar.addMenu("Help")
+        mhelp = cast(QMenu, menubar.addMenu("Help"))
         actabout = QAction("About", self)
         actabout.triggered.connect(self.onabout)
         mhelp.addAction(actabout)
 
-        self.srcedit = QLineEdit()
+        self.redis = QLineEdit()
         self.srcbtn = QPushButton("Browse…")
-        self.srcbtn.clicked.connect(lambda: self.pickdir(self.srcedit))
+        self.srcbtn.clicked.connect(lambda: self.pickdir(self.redis))
 
         self.outedit = QLineEdit()
         self.outbtn = QPushButton("Browse…")
@@ -892,7 +911,7 @@ class MediaSane(QWidget):
 
         srcrow = QHBoxLayout()
         srcrow.addWidget(self.srclabel)
-        srcrow.addWidget(self.srcedit, 1)
+        srcrow.addWidget(self.redis, 1)
         srcrow.addWidget(self.srcbtn)
 
         outrow = QHBoxLayout()
@@ -925,10 +944,11 @@ class MediaSane(QWidget):
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Original Path", "New Path / Result"])
-        header = self.table.horizontalHeader()
+        header = cast(QHeaderView, self.table.horizontalHeader())
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.verticalHeader().setVisible(False)
+        vertical = cast(QHeaderView, self.table.verticalHeader())
+        vertical.setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setShowGrid(True)
@@ -965,19 +985,31 @@ class MediaSane(QWidget):
 
         cfg = ConfigManager.load()
         self.prefs = ExecPrefs.fromdict(cfg)
-        self.srcedit.setText("")
+        self.redis.setText("")
         self.outedit.setText("")
-        self.srcedit.editingFinished.connect(self.populatetext)
+        self.redis.editingFinished.connect(self.populatetext)
 
         self.completed.connect(self.complethandler)
         self.fadeanimation: Optional[QPropertyAnimation] = None
+
+    # Function 'ensureposition'
+    def ensureposition(self):
+        """Reposition the floating counter widget.
+        Places it at the top-right, just under the Output row.
+        Called on resize/show events to keep it aligned."""
+        right_margin = 10
+        top_offset = self.outedit.geometry().bottom() + 6
+        x = self.width() - self.counterbox.width() - right_margin
+        y = top_offset
+        self.counterbox.move(max(0, x), max(0, y))
+        self.counterbox.raise_()
 
     # Function 'populatetext'
     def populatetext(self):
         """Populate table when user types a valid source path.
         Triggered when the Source field editing is finished.
         Avoids needing to re-open the directory dialog."""
-        srcpath = self.srcedit.text().strip()
+        srcpath = self.redis.text().strip()
         if srcpath and Path(srcpath).is_dir():
             self.populatetable(srcpath)
 
@@ -1005,18 +1037,6 @@ class MediaSane(QWidget):
         self.counterbox.adjustSize()
         self.ensureposition()
 
-    # Function 'ensureposition'
-    def ensureposition(self):
-        """Reposition the floating counter widget.
-        Places it at the top-right, just under the Output row.
-        Called on resize/show events to keep it aligned."""
-        right_margin = 10
-        top_offset = self.outedit.geometry().bottom() + 6
-        x = self.width() - self.counterbox.width() - right_margin
-        y = top_offset
-        self.counterbox.move(max(0, x), max(0, y))
-        self.counterbox.raise_()
-
     # Function 'eventFilter'
     def eventFilter(self, obj, ev: QEvent):
         """Qt event filter for resize/show events.
@@ -1035,11 +1055,11 @@ class MediaSane(QWidget):
         if d:
             edit.setText(d)
             other = {
-                "lastsrc": self.srcedit.text().strip(),
+                "lastsrc": self.redis.text().strip(),
                 "lastout": self.outedit.text().strip(),
             }
             ConfigManager.save(self.prefs, other)
-            if edit is self.srcedit:
+            if edit is self.redis:
                 self.populatetable(d)
 
     # Function 'flushrows'
@@ -1100,7 +1120,7 @@ class MediaSane(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.prefs = dlg.values()
             other = {
-                "lastsrc": self.srcedit.text().strip(),
+                "lastsrc": self.redis.text().strip(),
                 "lastout": self.outedit.text().strip(),
             }
             ConfigManager.save(self.prefs, other)
@@ -1119,14 +1139,17 @@ class MediaSane(QWidget):
         """Validate inputs and start a background run.
         Resets the table, toggles UI, and spawns the worker thread.
         Supports dry-run mode to preview planned changes."""
-        src = self.srcedit.text().strip()
+        src = self.redis.text().strip()
         out = self.outedit.text().strip()
+
         if not src:
             QMessageBox.warning(self, "Missing", "Please pick a source directory.")
             return
+
         if not Path(src).is_dir():
             QMessageBox.critical(self, "Error", "Source directory does not exist.")
             return
+
         if out and not Path(out).exists():
             try:
                 Path(out).mkdir(parents=True, exist_ok=True)
@@ -1150,7 +1173,9 @@ class MediaSane(QWidget):
             metatimeout=10,
             hashtimeout=60,
         )
-        self.worker = MediaRenamer(opts, self.prefs, self.rowqueue)
+
+        worker = MediaRenamer(opts, self.prefs, self.rowqueue)
+        self.worker = worker
 
         # Function 'workload'
         def workload():
@@ -1159,8 +1184,9 @@ class MediaSane(QWidget):
             Always re-enables buttons and hides the progress bar."""
             success = True
             errmsg = ""
+
             try:
-                self.worker.run()
+                worker.run()
             except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
                 success = False
                 errmsg = f"{e}"
@@ -1170,13 +1196,15 @@ class MediaSane(QWidget):
                 self.btnstop.setEnabled(False)
                 self.btnrun.setEnabled(True)
                 self.btndry.setEnabled(True)
+
                 try:
                     self.completed.emit(success, errmsg)
                 except RuntimeError:
                     pass
 
-        self.workerthread = threading.Thread(target=workload, daemon=True)
-        self.workerthread.start()
+        workerthread = threading.Thread(target=workload, daemon=True)
+        self.workerthread = workerthread
+        workerthread.start()
 
     # Function 'complethandler'
     def complethandler(self, success: bool, errmsg: str):
@@ -1338,14 +1366,7 @@ class UpdateChecker:
                     pix = tmp
                     break
         if pix:
-            logolabel.setPixmap(
-                pix.scaled(
-                    96,
-                    96,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+            logolabel.setPixmap(pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
         title = QLabel(f"<b>A new version of {self.appname} is available</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1397,6 +1418,8 @@ class AppEntry:
         """Launch the Qt application and the main widget.
         Sets up QApplication, constructs MediaSane, and shows it.
         Blocks on app.exec() until the window is closed."""
+        os.environ["QT_LOGGING_RULES"] = "qt.qpa.*=false"
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         app = QApplication(sys.argv)
         win = MediaSane()
         win.show()
@@ -1408,6 +1431,7 @@ class AppEntry:
             gitrepo="neoslab/mediasane",
             logo_paths=[Path("/usr/share/pixmaps/mediasane.png")],
         )
+        
         win.updatecheck = checker
         QTimer.singleShot(1500, checker.checknotify)
         sys.exit(app.exec())
