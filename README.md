@@ -168,60 +168,6 @@ python main.py
 
 * * *
 
-## Know bugs
-
-### PyCharm warning
-
-```
-Cannot find reference 'connect' in 'pyqtSignal | function'
-```
-
-**Fix (stub tweak):** Edit `QtCore.pyi` in your environment's `site-packages/PyQt6` and add `connect`/`emit` to `pyqtSignal`:
-
-```python
-# Support for new-style signals and slots.
-class pyqtSignal:
-
-    signatures = ...    # type: tuple[str, ...]
-
-    def __init__(self, *types: typing.Any, name: str = ...) -> None: ...
-
-    @typing.overload
-    def __get__(self, instance: None, owner: type['QObject']) -> 'pyqtSignal': ...
-
-    @typing.overload
-    def __get__(self, instance: 'QObject', owner: type['QObject']) -> 'pyqtBoundSignal': ...
-
-    # Cannot find reference 'connect' in 'pyqtSignal | function' fix
-    def connect(self, slot: 'PYQT_SLOT') -> 'QMetaObject.Connection': ...
-    def emit(self, *args: typing.Any) -> None: ...
-```
-
-> Note: Editing stubs is brittle. Alternatively, add `# type: ignore[attr-defined]` on lines where `connect`/`emit` are flagged.
-
-### PyQt6 type-stubs error with `QDialogButtonBox`
-
-**Error example:**
-
-```
-Unexpected type(s):(Literal[StandardButton.Cancel])
-Possible type(s):(Literal[StandardButton.Ok])(Literal[StandardButton.Ok])
-```
-
-**Cause:** Some PyQt6 stubs model `setStandardButtons` as a single `StandardButton`, but at runtime it's a flag enum, so `Ok | Cancel` gets flagged.
-
-```python
-from typing import cast
-btns = QDialogButtonBox(parent=self)
-buttons = cast(
-    QDialogButtonBox.StandardButton,
-    int(QDialogButtonBox.StandardButton.Ok) | int(QDialogButtonBox.StandardButton.Cancel)
-)
-btns.setStandardButtons(buttons)
-```
-
-* * *
-
 ## Known Issues & Notes
 
 ### `exiftool` availability

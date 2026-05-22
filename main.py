@@ -27,6 +27,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtGui import QIcon
 from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import QCheckBox
 from PyQt6.QtWidgets import QDialog
@@ -59,7 +60,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 # Define 'VERSION'
-VERSION = "v1.2.3"
+VERSION = "v1.2.4"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
@@ -82,25 +83,31 @@ ALLOWVID = set("mp4 mov m4v avi mkv 3gp webm".split())
 
 # Class 'SysUtils'
 class SysUtils:
-    """Low-level utilities for filesystem and metadata tasks.
-    Handles file extension parsing, EXIF/mtime date extraction, and hashing.
-    Designed as stateless helpers; functions may access the filesystem."""
+    """
+    Utility class providing system-level helper functions for file operations.
+    Includes methods for file extension handling, command existence checking,
+    EXIF data extraction, date formatting, and secure file movement operations.
+    """
 
     # Define 'lowerext'
     @staticmethod
     def lowerext(p: Path) -> str:
-        """Return the lowercase file extension for a Path.
-        Strips the leading dot and normalizes case for comparisons.
-        Used to decide media classification and output naming."""
+        """
+        Extract and return the lowercase file extension from a Path object.
+        Removes the leading dot from the extension string before returning.
+        Returns empty string if the file has no extension.
+        """
         ext = p.suffix[1:]
         return ext.lower()
 
     # Define 'cmdexists'
     @staticmethod
     def cmdexists(cmd: str) -> bool:
-        """Check whether a command exists in the current PATH.
-        Rejects empty names and path-like values containing '/'.
-        Returns True if an executable matching the command is found."""
+        """
+        Check if a command exists and is executable in the system PATH.
+        Returns False for empty commands or those containing path separators.
+        Searches all directories in PATH for the specified executable.
+        """
         if not cmd or "/" in cmd:
             return False
 
@@ -113,9 +120,11 @@ class SysUtils:
     # Define 'classify'
     @staticmethod
     def classify(extlc: str, prefs: "ExecPrefs") -> str:
-        """Map a lowercase extension to the appropriate naming prefix.
-        Returns image or video prefix based on allowed extension sets.
-        Empty string means unsupported or unknown media type."""
+        """
+        Classify a file as image or video based on its lowercase extension.
+        Returns the appropriate prefix (IMG- for images, VID- for videos).
+        Returns empty string if the extension is not supported.
+        """
         if extlc in ALLOWIMG:
             return prefs.imgprefix
         if extlc in ALLOWVID:
@@ -125,9 +134,11 @@ class SysUtils:
     # Define 'exifdate'
     @staticmethod
     def exifdate(path: Path, timeouts: int = 10) -> str:
-        """Extract a YYYYMMDD date from EXIF/metadata using exiftool.
-        Tries multiple date tags and formats the first valid date found.
-        Returns empty string on failure, timeout, or if exiftool is absent."""
+        """
+        Extract the date from EXIF metadata using exiftool command-line tool.
+        Returns date in YYYYMMDD format from DateTimeOriginal or other tags.
+        Returns empty string if exiftool is unavailable or extraction fails.
+        """
         if not SysUtils.cmdexists("exiftool"):
             return ""
         try:
@@ -154,17 +165,21 @@ class SysUtils:
     # Define 'epochdate'
     @staticmethod
     def epochdate(epoch: float) -> str:
-        """Format an epoch timestamp into YYYYMMDD local date.
-        Uses datetime.fromtimestamp for local time conversion.
-        Returns a compact 8-digit date string suitable for filenames."""
+        """
+        Convert a Unix timestamp (epoch) to a formatted date string.
+        Returns date in YYYYMMDD format using the system local timezone.
+        Provides consistent date formatting across different file operations.
+        """
         return datetime.fromtimestamp(epoch).strftime("%Y%m%d")
 
     # Define 'datename'
     @staticmethod
     def datename(name: str) -> str:
-        """Parse an 8-digit leading date (YYYYMMDD) from a name.
-        If the name does not start with an 8-digit date, return empty.
-        Helpful to preserve existing date-based names when present."""
+        """
+        Extract a potential date string from the beginning of a filename.
+        Returns the first 8 characters if they are all digits (YYYYMMDD).
+        Returns empty string if the filename doesn't start with a valid date.
+        """
         if len(name) >= 8 and name[:8].isdigit():
             return name[:8]
         return ""
@@ -172,9 +187,11 @@ class SysUtils:
     # Define 'datetime'
     @staticmethod
     def datetime(path: Path) -> str:
-        """Return file modification time as YYYYMMDD.
-        Uses os.stat to read mtime and formats it compactly.
-        Returns empty string on errors or inaccessible files."""
+        """
+        Get the last modification time of a file as a formatted date string.
+        Returns date in YYYYMMDD format using the file's modification timestamp.
+        Handles OSError exceptions by returning an empty string on failure.
+        """
         try:
             return SysUtils.epochdate(path.stat().st_mtime)
         except (OSError, ValueError):
@@ -183,17 +200,21 @@ class SysUtils:
     # Define 'datetoday'
     @staticmethod
     def datetoday() -> str:
-        """Return today's local date as YYYYMMDD.
-        Acts as a last-resort fallback when metadata is missing.
-        Ensures deterministic naming even without file dates."""
+        """
+        Get the current system date as a formatted string.
+        Returns today's date in YYYYMMDD format for fallback naming.
+        Used when no other date information can be extracted from a file.
+        """
         return datetime.now().strftime("%Y%m%d")
 
     # Define 'hashkey'
     @staticmethod
     def hashkey(path: Path, hash_budget_s: int = 60, quick_prefix_bytes: int = 1024 * 1024) -> Tuple[str, bool]:
-        """Compute a content hash key with a time budget.
-        Falls back to a weak key (size@mtime) if budget exceeded or I/O fails.
-        Also includes a quick Blake-2b of the file prefix for robustness."""
+        """
+        Generate a hash key for file deduplication with timeout protection.
+        Returns a tuple containing the hash string and a timeout flag.
+        Uses SHA-256 for complete hashing and Blake2b for fast prefix hashing.
+        """
         try:
             st = path.stat()
             size = st.st_size
@@ -233,9 +254,11 @@ class SysUtils:
     # Define 'safemove'
     @staticmethod
     def safemove(src: Path, dst: Path) -> bool:
-        """Move a file, falling back to copy2+unlink on cross-device errors.
-        Ensures destination directories exist before moving/copying.
-        Returns True on success and False if all strategies fail."""
+        """
+        Safely move a file from source to destination with fallback copy strategy.
+        Creates parent directories if they don't exist before moving.
+        Falls back to copy+delete if rename operation fails (cross-device moves).
+        """
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             src.rename(dst)
@@ -252,9 +275,11 @@ class SysUtils:
 # Class 'ExecPrefs'
 @dataclass
 class ExecPrefs:
-    """User-adjustable naming preferences for output files.
-    Stores prefixes for images and videos used during renaming.
-    Serializable to/from dict for config persistence."""
+    """
+    Data class for storing user preferences for file naming conventions.
+    Contains prefix strings for images and videos used during renaming.
+    Provides methods for dictionary conversion and object reconstruction.
+    """
 
     # Define 'imgprefix'
     imgprefix: str = "IMG-"
@@ -264,17 +289,21 @@ class ExecPrefs:
 
     # Function 'todict'
     def todict(self) -> Dict[str, str]:
-        """Serialize preferences to a plain dict.
-        Intended for lightweight config storage and merging.
-        Keys mirror dataclass fields for simplicity."""
+        """
+        Convert the ExecPrefs object to a dictionary for serialization.
+        Returns a dictionary with 'imgprefix' and 'vidprefix' keys.
+        Used when saving preferences to configuration files.
+        """
         return {"imgprefix": self.imgprefix, "vidprefix": self.vidprefix}
 
     # Function 'fromdict'
     @staticmethod
     def fromdict(d: Dict[str, str]) -> "ExecPrefs":
-        """Create an ExecPrefs instance from a dict.
-        Unknown keys are ignored; defaults are applied as needed.
-        Ensures safe loading from partially filled configs."""
+        """
+        Create an ExecPrefs object from a dictionary of configuration values.
+        Uses default values if specific keys are missing from the dictionary.
+        Provides safe reconstruction of preferences from serialized data.
+        """
         return ExecPrefs(
             imgprefix=str(d.get("imgprefix", "IMG-")),
             vidprefix=str(d.get("vidprefix", "VID-")),
@@ -283,16 +312,20 @@ class ExecPrefs:
 
 # Class 'ConfigManager'
 class ConfigManager:
-    """Tiny helper for reading/writing the app config file.
-    Stores prefixes and last used directories under ~/.config/mediasane.
-    Tolerant to missing files and I/O/permission issues."""
+    """
+    Manages loading and saving of application configuration to disk.
+    Handles reading/writing key-value pairs from a plain text configuration file.
+    Ensures proper directory creation and error handling during I/O operations.
+    """
 
     # Function 'load'
     @staticmethod
     def load() -> Dict[str, str]:
-        """Load key=value pairs from the config file.
-        Ignores blank lines, comments, and malformed entries.
-        Returns a dict with any discovered settings."""
+        """
+        Load configuration from the config file into a dictionary.
+        Ignores empty lines, comments starting with '#', and malformed entries.
+        Returns an empty dictionary if the config file doesn't exist or is invalid.
+        """
         data: Dict[str, str] = {}
         try:
             if CONFIGFILE.is_file():
@@ -309,9 +342,11 @@ class ConfigManager:
     # Function 'save'
     @staticmethod
     def save(prefs: ExecPrefs, other: Dict[str, str]):
-        """Write preferences and auxiliary fields to the config file.
-        Creates the config directory if necessary and ignores errors.
-        Values are persisted as simple key=value lines."""
+        """
+        Save application preferences and other settings to the config file.
+        Creates the config directory if it doesn't exist before writing.
+        Writes configuration in key=value format, one entry per line.
+        """
         try:
             CONFIGPATH.mkdir(parents=True, exist_ok=True)
             lines = [f"imgprefix={prefs.imgprefix}", f"vidprefix={prefs.vidprefix}"]
@@ -325,6 +360,12 @@ class ConfigManager:
 # Class 'ExecOptions'
 @dataclass
 class ExecOptions:
+    """
+    Data class for storing runtime execution options for the renamer.
+    Contains source/output directories, duplicate handling, and timeout settings.
+    Provides configuration parameters for dry-run and processing behavior.
+    """
+
     # Define 'srcdir'
     srcdir: str = ""
 
@@ -346,15 +387,19 @@ class ExecOptions:
 
 # Class 'MediaRenamer'
 class MediaRenamer:
-    """Core planner/executor for scanning, deduping, and renaming.
-    Enumerates eligible media, derives dates, and plans moves safely.
-    Pushes final results to a queue for GUI consumption."""
+    """
+    Core class that handles the file renaming and deduplication logic.
+    Processes media files by extracting dates, generating new names, and managing duplicates.
+    Implements threading-safe operations with cancellation support and progress reporting.
+    """
 
     # Define '__init__'
     def __init__(self, opts: ExecOptions, prefs: ExecPrefs, rowsink: queue.Queue):
-        """Initialize with execution options, prefs, and a result queue.
-        Prepares state for duplicate detection and rename planning.
-        No filesystem work occurs until run() is invoked."""
+        """
+        Initialize the MediaRenamer with execution options and preferences.
+        Sets up internal data structures for tracking files and results.
+        Creates a queue for sending progress updates to the GUI thread.
+        """
         self.opts = opts
         self.prefs = prefs
         self.rowsink = rowsink
@@ -367,25 +412,31 @@ class MediaRenamer:
 
     # Define 'cancel'
     def cancel(self):
-        """Signal the worker to stop at the next safe checkpoint.
-        Sets an internal flag polled by long-running loops.
-        Raises in checkstop() to unwind promptly."""
+        """
+        Signal the renaming operation to stop as soon as possible.
+        Sets a flag that is checked periodically during processing.
+        Allows graceful cancellation of long-running operations.
+        """
         self.stopflag = True
 
     # Define 'checkstop'
     def checkstop(self):
-        """Abort processing if a stop was requested.
-        Intended to be called frequently within loops.
-        Raises RuntimeError to break out of the workflow."""
+        """
+        Check if the operation has been cancelled and raise an exception if so.
+        Called at safe points during processing to enable cancellation.
+        Raises RuntimeError with 'Cancelled' message when stop flag is set.
+        """
         if self.stopflag:
             raise RuntimeError("Cancelled")
 
     # Define 'enumfiles'
     @staticmethod
     def enumfiles(root: Path) -> List[Path]:
-        """Walk a directory tree and collect supported media files.
-        Skips the internal .duplicates directory to avoid recursion.
-        Returns a list of Paths for images and videos only."""
+        """
+        Recursively enumerate all supported media files in a directory tree.
+        Skips the '.duplicates' folder to avoid processing already moved files.
+        Returns a list of Path objects for all images and videos found.
+        """
         files: List[Path] = []
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d != ".duplicates"]
@@ -398,9 +449,11 @@ class MediaRenamer:
 
     # Define 'resolvedate'
     def resolvedate(self, path_in: Path) -> str:
-        """Resolve a best-fit date for a media file as YYYYMMDD.
-        Tries name prefix, then EXIF/metadata, then mtime, then today.
-        Provides a deterministic fallback chain for robust naming."""
+        """
+        Resolve the best available date for a file using multiple strategies.
+        Tries filename date, EXIF metadata, file modification time, and today's date.
+        Returns the date as a YYYYMMDD string for use in the new filename.
+        """
         d = SysUtils.datename(path_in.stem)
         if not d:
             d = SysUtils.exifdate(path_in, timeouts=self.opts.metatimeout)
@@ -412,16 +465,17 @@ class MediaRenamer:
 
     # Define 'parsefilename'
     def parsefilename(self, path: Path) -> Optional[Tuple[str, str, int]]:
-        """Parse a numbered media filename into parts.
-        Returns (prefix, YYYYMMDD, seq) if it matches the scheme.
-        Returns None when the name is not in the target format."""
+        """
+        Parse a filename to extract prefix, date, and sequence number.
+        Expects format like IMG-20241201-00001.jpg or VID-20241201-00001.mp4.
+        Returns a tuple of (prefix, date, sequence) or None if format doesn't match.
+        """
         stem = path.stem
-        # Match against the known prefixes only
         for pfx in (self.prefs.imgprefix, self.prefs.vidprefix):
             base_len = len(pfx)
             if not stem.startswith(pfx):
                 continue
-            if len(stem) < base_len + 9:  # YYYYMMDD-SSSSS
+            if len(stem) < base_len + 9:
                 continue
             date_part = stem[base_len:base_len + 8]
             if not date_part.isdigit():
@@ -435,9 +489,11 @@ class MediaRenamer:
 
     # Define 'groupdate'
     def groupdate(self, out: Path) -> Dict[Tuple[str, str], List[Path]]:
-        """Collect already-named files in the output by date.
-        Groups by (prefix, YYYYMMDD) across all allowed extensions.
-        Excludes the internal .duplicates directory."""
+        """
+        Group files in the output directory by their prefix and date.
+        Walks through the directory tree excluding the .duplicates folder.
+        Returns a dictionary mapping (prefix, date) keys to lists of file paths.
+        """
         groups: Dict[Tuple[str, str], List[Path]] = {}
         try:
             for dirpath, dirnames, filenames in os.walk(out):
@@ -456,9 +512,11 @@ class MediaRenamer:
 
     # Define 'allseq'
     def allseq(self, out: Path):
-        """Normalize numbering to start at 00001 for each date group.
-        Renames both existing and newly added files to fill gaps.
-        Uses temp placeholders to avoid collisions during renames."""
+        """
+        Renumber all files in the output directory to ensure sequential ordering.
+        Groups files by prefix and date, then reassigns sequence numbers in order.
+        Uses temporary filenames to avoid conflicts during the renumbering process.
+        """
         groups = self.groupdate(out)
         for key, paths in groups.items():
             self.checkstop()
@@ -514,9 +572,11 @@ class MediaRenamer:
 
     # Define 'plandup'
     def plandup(self):
-        """Plan duplicate handling and final rename destinations.
-        Computes content hash keys, tracks dupes, and sequences files.
-        Populates action lists and a readable results summary."""
+        """
+        Plan duplicate detection and file renaming operations.
+        Scans source directory, identifies duplicates using hash keys.
+        Prepares lists of actions for duplicate handling and file renaming.
+        """
         src = Path(self.opts.srcdir)
         out = Path(self.opts.outdir) if self.opts.outdir else src
 
@@ -568,9 +628,11 @@ class MediaRenamer:
 
     # Define 'planexec'
     def planexec(self):
-        """Execute planned duplicate handling and renames.
-        Performs safe moves to temporary paths before finalization.
-        Emits a row (old,new) to the queue for each processed file."""
+        """
+        Execute the planned renaming and duplicate handling operations.
+        Processes duplicates first, then performs file renames with temporary files.
+        Updates the progress queue and performs resequencing after all moves.
+        """
         totalrenames = len(self.actrenames)
         self.rowsink.put(("__TOTAL__", str(totalrenames)))
 
@@ -637,31 +699,39 @@ class MediaRenamer:
 
     # Function 'streamrun'
     def streamrun(self):
-        """Stream files one-by-one with progressive UI updates.
-        Enumerates, hashes, decides destination, moves, and reports.
-        Preserves date-group numbering that restarts at each date."""
+        """
+        Execute the complete renaming pipeline in streaming mode.
+        First plans duplicate handling and renaming operations.
+        Then executes the planned operations while streaming progress updates.
+        """
         self.plandup()
         self.planexec()
 
     # Define 'run'
     def run(self):
-        """Run the full pipeline: plan then execute.
-        Intended to be called from a worker thread in the GUI.
-        Raises on cancellation and reports results progressively."""
+        """
+        Main entry point for executing the media renaming process.
+        Initiates the streaming execution of all renaming operations.
+        Designed to be called from a separate thread for responsive GUI.
+        """
         self.streamrun()
 
 
 # Class 'DialogPrefs'
 class DialogPrefs(QDialog):
-    """Preferences dialog for naming settings.
-    Allows users to edit image/video prefixes with validation.
-    Changes are returned as an ExecPrefs copy on accept."""
+    """
+    Dialog window for editing user preferences and naming conventions.
+    Provides interface for modifying image and video file prefixes.
+    Saves changes when user confirms with OK button, discards on Cancel.
+    """
 
     # Define '__init__'
     def __init__(self, parent: QWidget, prefs: ExecPrefs):
-        """Build the tabbed preferences dialog UI.
-        Initializes fields with current preference values.
-        OK/Cancel buttons manage accept/reject lifecycle."""
+        """
+        Initialize the preferences dialog with current preference values.
+        Creates input fields for image and video prefixes in a tab widget.
+        Sets up OK and Cancel buttons with appropriate dialog actions.
+        """
         super().__init__(parent)
         self.setWindowTitle("Preferences")
         self.setModal(True)
@@ -692,9 +762,11 @@ class DialogPrefs(QDialog):
 
     # Define 'values'
     def values(self) -> ExecPrefs:
-        """Return sanitized ExecPrefs based on user input.
-        Falls back to defaults when fields are left blank.
-        Intended to be called after dialog acceptance."""
+        """
+        Retrieve the modified preference values from the dialog inputs.
+        Strips whitespace and ensures non-empty values default to standard prefixes.
+        Returns a new ExecPrefs object with the current dialog settings.
+        """
         self.prefs.imgprefix = self.editimg.text().strip() or "IMG-"
         self.prefs.vidprefix = self.edited.text().strip() or "VID-"
         return self.prefs
@@ -702,15 +774,19 @@ class DialogPrefs(QDialog):
 
 # Custom 'DialogAbout'
 class DialogAbout(QDialog):
-    """Simple About dialog displaying branding and links.
-    Shows app name, version, website and a short description.
-    Uses a bundled or system icon when available."""
+    """
+    About dialog displaying application information and credits.
+    Shows the application logo, version number, website link, and description.
+    Provides a simple OK button to close the dialog after viewing.
+    """
 
     # Function '__init__'
     def __init__(self, parent: Optional[QWidget], version: str, website: str):
-        """Construct the About dialog UI and load logo.
-        Searches multiple candidate paths for an icon/pixmap.
-        Populates labels and wires the close button."""
+        """
+        Initialize the about dialog with application metadata.
+        Loads and displays the application icon from system paths.
+        Creates clickable website link and formatted version information.
+        """
         super().__init__(parent)
         self.setWindowTitle(f"About {APPNAME}")
         self.setModal(True)
@@ -731,7 +807,8 @@ class DialogAbout(QDialog):
                     break
 
         if pixmap:
-            logolabel.setPixmap(pixmap.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            logolabel.setPixmap(
+                pixmap.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
         title = QLabel(f"<b>{APPNAME}</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -769,17 +846,17 @@ class DialogAbout(QDialog):
 # Custom 'DialogCompleted'
 class DialogCompleted(QDialog):
     """
-    Modal dialog to notify the user that cleanup is complete.
-    Shows a 128×128 PNG icon, a confirmation message, and a close button.
-    Centers relative to the parent window and supports the standard close.
+    Completion dialog shown after renaming operations finish.
+    Displays success or failure message with appropriate icon.
+    Allows user to acknowledge the completion of the operation.
     """
 
     # Function '__init__'
     def __init__(self, parent: Optional[QWidget], error_message: Optional[str] = None):
         """
-        Build the completion dialog with icon, text and a Close button.
-        Attempts to load an app icon from known locations with fallbacks.
-        Keeps the layout compact and visually centered in the parent.
+        Initialize the completion dialog with success or error state.
+        Loads success or error icon based on whether an error message is provided.
+        Displays appropriate title and message text for the operation result.
         """
         super().__init__(parent)
         self.setWindowTitle("Cleanup Completed" if not error_message else "Cleanup Failed")
@@ -802,7 +879,8 @@ class DialogCompleted(QDialog):
                     pix = tmp
                     break
         if pix:
-            iconlabel.setPixmap(pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            iconlabel.setPixmap(
+                pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
         title = QLabel("<b>Renaming finished successfully</b>" if not error_message else "<b>Renaming failed</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -833,9 +911,9 @@ class DialogCompleted(QDialog):
     # Function 'showcenter'
     def showcenter(self):
         """
-        Show the dialog centered over its parent window.
-        Adjusts size before placement to ensure correct centering.
-        Uses the parent's geometry for accurate positioning.
+        Display the dialog centered relative to its parent widget.
+        Adjusts dialog size before centering for proper alignment.
+        Executes the dialog modally, blocking until user closes it.
         """
         self.adjustSize()
         parent = self.parentWidget()
@@ -847,16 +925,21 @@ class DialogCompleted(QDialog):
 
 # Class 'MediaSane'
 class MediaSane(QWidget):
-    """Main PyQt GUI for MediaSane's rename workflow.
-    Provides source/output selection, options, and progress.
-    Streams results into a table while a worker thread runs."""
+    """
+    Main application window for the MediaSane GUI.
+    Provides interface for selecting source/output directories and running operations.
+    Handles threading, progress updates, and user interaction with the renamer.
+    """
+
     completed = pyqtSignal(bool, str)
 
     # Define '__init__'
     def __init__(self):
-        """Create the main window, menus, widgets, and timers.
-        Loads saved config, initializes preferences, and wiring.
-        Sets up a background queue for incremental row updates."""
+        """
+        Initialize the main application window and UI components.
+        Sets up the menu bar, file selection controls, and results table.
+        Loads saved preferences and connects signal/slot connections.
+        """
         super().__init__()
         iconpath = Path("/usr/share/pixmaps/mediasane.png")
         if iconpath.is_file():
@@ -989,14 +1072,16 @@ class MediaSane(QWidget):
         self.outedit.setText("")
         self.redis.editingFinished.connect(self.populatetext)
 
-        self.completed.connect(self.complethandler)
+        self.completed.connect(self.showhandler)
         self.fadeanimation: Optional[QPropertyAnimation] = None
 
     # Function 'ensureposition'
     def ensureposition(self):
-        """Reposition the floating counter widget.
-        Places it at the top-right, just under the Output row.
-        Called on resize/show events to keep it aligned."""
+        """
+        Position the file counter overlay in the top-right corner of the window.
+        Calculates position relative to the output directory input field.
+        Ensures the counter stays visible and properly positioned on resize events.
+        """
         right_margin = 10
         top_offset = self.outedit.geometry().bottom() + 6
         x = self.width() - self.counterbox.width() - right_margin
@@ -1006,18 +1091,22 @@ class MediaSane(QWidget):
 
     # Function 'populatetext'
     def populatetext(self):
-        """Populate table when user types a valid source path.
-        Triggered when the Source field editing is finished.
-        Avoids needing to re-open the directory dialog."""
+        """
+        Populate the results table with files from the source directory.
+        Triggered when the source directory input field loses focus.
+        Updates the table display to show all media files in the selected directory.
+        """
         srcpath = self.redis.text().strip()
         if srcpath and Path(srcpath).is_dir():
             self.populatetable(srcpath)
 
     # Function 'populatetable'
     def populatetable(self, directory: str):
-        """Populate the table with files from a directory.
-        Clears previous rows and lists supported media immediately.
-        Initializes the counter to 0 / total files detected."""
+        """
+        Fill the table widget with all media files from the specified directory.
+        Clears existing rows and rebuilds the table with sorted file paths.
+        Updates the file counter and prepares for renaming operations.
+        """
         self.table.setRowCount(0)
         self.rowindex.clear()
         try:
@@ -1039,18 +1128,22 @@ class MediaSane(QWidget):
 
     # Function 'eventFilter'
     def eventFilter(self, obj, ev: QEvent):
-        """Qt event filter for resize/show events.
-        Keeps the counter box aligned to the top-right corner.
-        Lightweight and avoids extra layout lines."""
+        """
+        Handle window resize and show events to reposition the counter overlay.
+        Filters events for the main window to maintain counter positioning.
+        Ensures the counter stays visible during window size changes.
+        """
         if obj is self and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             self.ensureposition()
         return super().eventFilter(obj, ev)
 
     # Function 'pickdir'
     def pickdir(self, edit: QLineEdit):
-        """Open a directory chooser and store the chosen path.
-        Updates the corresponding line edit and persists paths.
-        Ignores errors while saving to the config file."""
+        """
+        Open a directory selection dialog and update the specified input field.
+        Saves the last used source and output directories to configuration.
+        If updating source directory, refreshes the file table display.
+        """
         d = QFileDialog.getExistingDirectory(self, "Choose Directory", edit.text() or str(Path.home()))
         if d:
             edit.setText(d)
@@ -1064,9 +1157,11 @@ class MediaSane(QWidget):
 
     # Function 'flushrows'
     def flushrows(self):
-        """Drain queued result rows into the table widget.
-        Called on a timer to keep the UI responsive.
-        Stops when the queue is empty for this cycle."""
+        """
+        Process queued updates from the worker thread to update the GUI table.
+        Handles special message types for total file count and progress updates.
+        Updates table rows with original and new file paths as they become available.
+        """
         try:
             while True:
                 old, new = self.rowqueue.get_nowait()
@@ -1105,17 +1200,21 @@ class MediaSane(QWidget):
 
     # Function 'onabout'
     def onabout(self):
-        """Show the About dialog with version and website.
-        Instantiates DialogAbout and blocks until closed.
-        Pure UI action; no state changes persisted."""
+        """
+        Show the about dialog when the About menu item is clicked.
+        Displays application information including version and website.
+        Modal dialog that blocks until user closes it.
+        """
         dlg = DialogAbout(self, VERSION, WEBSITEURL)
         dlg.exec()
 
     # Function 'onprefs'
     def onprefs(self):
-        """Open the Preferences dialog and apply changes.
-        Saves updated prefixes and last used directories.
-        Only persists after user acceptance."""
+        """
+        Open the preferences dialog for editing naming conventions.
+        If user accepts changes, updates preferences and saves to configuration.
+        Preserves last used directory paths when saving new preferences.
+        """
         dlg = DialogPrefs(self, self.prefs)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.prefs = dlg.values()
@@ -1127,18 +1226,22 @@ class MediaSane(QWidget):
 
     # Function 'onstop'
     def onstop(self):
-        """Request cancellation of the active worker.
-        Disables the Stop button to avoid duplicate clicks.
-        Worker periodically checks and exits gracefully."""
+        """
+        Cancel the currently running renaming operation.
+        Disables the stop button to prevent multiple cancellation requests.
+        Signals the worker thread to stop at the next safe checkpoint.
+        """
         if self.worker:
             self.worker.cancel()
             self.btnstop.setEnabled(False)
 
     # Function 'onrun'
     def onrun(self, dry: bool):
-        """Validate inputs and start a background run.
-        Resets the table, toggles UI, and spawns the worker thread.
-        Supports dry-run mode to preview planned changes."""
+        """
+        Start the renaming operation with the specified dry-run setting.
+        Validates source directory existence and creates output directory if needed.
+        Launches worker thread to perform renaming without blocking the GUI.
+        """
         src = self.redis.text().strip()
         out = self.outedit.text().strip()
 
@@ -1179,9 +1282,11 @@ class MediaSane(QWidget):
 
         # Function 'workload'
         def workload():
-            """Run the renamer and restore UI state on finish.
-            Catches common runtime errors and reports them as rows.
-            Always re-enables buttons and hides the progress bar."""
+            """
+            Worker function executed in a separate thread to perform renaming.
+            Catches exceptions and emits completion signal with status.
+            Restores button states and hides progress bar when finished.
+            """
             success = True
             errmsg = ""
 
@@ -1206,11 +1311,13 @@ class MediaSane(QWidget):
         self.workerthread = workerthread
         workerthread.start()
 
-    # Function 'complethandler'
-    def complethandler(self, success: bool, errmsg: str):
-        """Show a centered popup notifying completion or failure.
-        Mirrors BlitzClean behavior and then fades the table out.
-        Invoked via the 'completed' signal at the end of a run."""
+    # Function 'showhandler'
+    def showhandler(self, success: bool, errmsg: str):
+        """
+        Handle the completion signal from the worker thread.
+        Shows completion dialog unless in dry-run mode.
+        Triggers fade animation for the results table after dry-run completion.
+        """
         if self.worker and self.worker.opts.dryrun:
             return
         dlg = DialogCompleted(self, error_message=(errmsg if not success else None))
@@ -1219,9 +1326,11 @@ class MediaSane(QWidget):
 
     # Function 'fadecleaner'
     def fadecleaner(self):
-        """Fade out the table contents with a short animation.
-        Clears rows after fade and restores full opacity effect.
-        Provides a neat visual ending to the processing run."""
+        """
+        Apply a fade-out animation to clear the results table.
+        Creates opacity effect and animates transition from visible to invisible.
+        Clears table rows after animation completes to indicate fresh state.
+        """
         if self.table.rowCount() == 0:
             return
 
@@ -1236,9 +1345,11 @@ class MediaSane(QWidget):
 
         # Function 'fadeafter'
         def fadeafter():
-            """Clears all rows in the table after the fade animation ends.
-            Removes the opacity effect from the table to restore normal appearance.
-            Finalizes the fade-out process by resetting the table to its initial state."""
+            """
+            Callback to clear the table after fade animation completes.
+            Removes all table rows and removes the graphics effect.
+            Called when the opacity animation finishes.
+            """
             self.table.setRowCount(0)
             self.table.setGraphicsEffect(None)
 
@@ -1250,23 +1361,23 @@ class MediaSane(QWidget):
 # Class 'UpdateChecker'
 class UpdateChecker:
     """
-    Check GitHub releases for a newer version.
-    Show a modal popup reusing the About-style layout.
-    Intended to be called once at application startup.
+    Checks for application updates from GitHub releases.
+    Compares current version with latest available release.
+    Shows notification dialog when newer version is available.
     """
 
     # Function '__init__'
-    def __init__(self, parent: QWidget, appname: str, currvers: str, gitrepo: str, logo_paths: Optional[List[Path]] = None):
+    def __init__(self, parent: QWidget, appname: str, currvers: str, gitrepo: str, logopaths: Optional[List[Path]] = None):
         """
-        Store configuration needed for update checks.
-        Accepts parent widget, app name, current version and repo.
-        Optional logo paths override the default guessed location.
+        Initializes update checker with application metadata and GitHub repository.
+        Stores parent widget reference for dialog display.
+        Configures paths for loading application icon in notification dialog.
         """
         self.parent = parent
         self.appname = appname
         self.currvers = currvers
         self.gitrepo = gitrepo
-        self.logo_paths = logo_paths or [
+        self.logopaths = logopaths or [
             Path(f"/usr/share/pixmaps/{appname.lower()}.png")
         ]
 
@@ -1274,9 +1385,9 @@ class UpdateChecker:
     @staticmethod
     def versionparser(ver: str) -> Tuple[int, ...]:
         """
-        Parse a version string like 'v1.2.3' into integers.
-        Ignores any non-numeric suffixes after the core numbers.
-        Returns a tuple suitable for safe semantic comparison.
+        Parses version string into tuple of integers for comparison.
+        Strips leading 'v' or 'V' characters from version string.
+        Returns tuple with parts converted to integers for lexicographic comparison.
         """
         v = ver.strip()
         if v.startswith(("v", "V")):
@@ -1292,9 +1403,9 @@ class UpdateChecker:
     # Function 'checknewer'
     def checknewer(self, current: str, latest: str) -> bool:
         """
-        Compare two version strings in semantic order.
-        Pads shorter tuples with zeros before comparison.
-        Returns True when latest is strictly greater.
+        Compares two version strings to determine if latest is newer.
+        Normalizes version length by padding with zeros.
+        Returns True if latest version is greater than current version.
         """
         c = self.versionparser(current)
         l = self.versionparser(latest)
@@ -1306,9 +1417,9 @@ class UpdateChecker:
     # Function 'checknotify'
     def checknotify(self, timeout: int = 3):
         """
-        Perform a single update check against GitHub releases.
-        If a newer tag exists, show the update popup dialog.
-        Intended to be called from the main GUI thread.
+        Checks for updates and shows notification if newer version exists.
+        Fetches latest version from GitHub and compares with current.
+        Shows update dialog when newer release is available.
         """
         latest = self.fetchtag(timeout=timeout)
         if not latest:
@@ -1317,13 +1428,13 @@ class UpdateChecker:
             return
         url = f"https://github.com/{self.gitrepo}/releases/tag/{latest}"
         self.showupdate(latest, url)
-        
+
     # Function 'fetchtag'
     def fetchtag(self, timeout: int = 3) -> Optional[str]:
         """
-        Call GitHub API to obtain the latest release tag.
-        Uses /repos/{repo}/releases/latest with a short timeout.
-        Returns the tag name string or None on any failure.
+        Fetches latest release tag name from GitHub API.
+        Makes HTTP request with timeout to prevent UI freezing.
+        Returns tag name string or None if request fails.
         """
         try:
             url = f"https://api.github.com/repos/{self.gitrepo}/releases/latest"
@@ -1346,9 +1457,9 @@ class UpdateChecker:
     # Function 'showupdate'
     def showupdate(self, latest: str, url: str):
         """
-        Build and display the update popup dialog.
-        Reuses the About layout with logo, text and link.
-        Blocks until user closes the window or presses OK.
+        Displays update notification dialog with version information.
+        Shows current version, latest version, and download link.
+        Provides OK button to dismiss dialog after reading.
         """
         dlg = QDialog(self.parent)
         dlg.setWindowTitle("Update Available")
@@ -1359,14 +1470,15 @@ class UpdateChecker:
         logolabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         pix: Optional[QPixmap] = None
-        for pth in self.logo_paths:
+        for pth in self.logopaths:
             if pth.is_file():
                 tmp = QPixmap(str(pth))
                 if not tmp.isNull():
                     pix = tmp
                     break
         if pix:
-            logolabel.setPixmap(pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            logolabel.setPixmap(
+                pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
         title = QLabel(f"<b>A new version of {self.appname} is available</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1408,30 +1520,40 @@ class UpdateChecker:
 
 # Class 'AppEntry'
 class AppEntry:
-    """Thin application entry-point wrapper.
-    Creates the QApplication and shows the main window.
-    Exits with the Qt event loop's return code."""
+    """
+    Application entry point class that initializes and starts the MediaSane GUI.
+    Sets up Qt application with proper environment and signal handling.
+    Creates main window, checks for updates, and starts the event loop.
+    """
 
     # Function 'main'
     @staticmethod
     def main():
-        """Launch the Qt application and the main widget.
-        Sets up QApplication, constructs MediaSane, and shows it.
-        Blocks on app.exec() until the window is closed."""
+        """
+        Main entry point function that launches the entire application.
+        Configures Qt logging, sets up application name and icon.
+        Creates main window, starts update checker, and executes application loop.
+        """
         os.environ["QT_LOGGING_RULES"] = "qt.qpa.*=false"
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         app = QApplication(sys.argv)
+
+        if hasattr(QGuiApplication, "setDesktopFileName"):
+            QGuiApplication.setDesktopFileName("mediasane")
+
+        app.setApplicationName(f"{APPNAME}")
+        app.setWindowIcon(QIcon("/usr/share/pixmaps/mediasane.png"))
+
         win = MediaSane()
         win.show()
-
         checker = UpdateChecker(
             parent=win,
             appname=APPNAME,
             currvers=VERSION,
             gitrepo="neoslab/mediasane",
-            logo_paths=[Path("/usr/share/pixmaps/mediasane.png")],
+            logopaths=[Path("/usr/share/pixmaps/mediasane.png")],
         )
-        
+
         win.updatecheck = checker
         QTimer.singleShot(1500, checker.checknotify)
         sys.exit(app.exec())
