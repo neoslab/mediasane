@@ -50,12 +50,12 @@ sudo apt install -y python3-pyqt6 exiftool
 
 ## Installation
 
-Download the latest DEB version from the [releases](https://github.com/neoslab/mediasane/releases/) section (the current version is v1.2.4) and use the following command:
+Download the latest DEB version from the [releases](https://github.com/neoslab/mediasane/releases/) section (the current version is v1.2.5) and use the following command:
 
 ```bash
 cd /tmp/
-wget https://github.com/neoslab/mediasane/releases/download/v1.2.4/mediasane_1.2.4_all.deb
-sudo dpkg -i mediasane_1.2.4_all.deb
+wget https://github.com/neoslab/mediasane/releases/download/v1.2.5/mediasane_1.2.5_all.deb
+sudo dpkg -i mediasane_1.2.5_all.deb
 ```
 
 > Tip: For large folders, consider running **Dry-Run** first to assess the plan and hashing cost.
